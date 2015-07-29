@@ -1,7 +1,10 @@
 # raytracer
 
-Basic ray tracing implementation
+Ray tracing implementation in ruby supporting reflection and shadows.
 
-## Screenshot
+## Screenshots
 
-![Sample](test.png)
+![Two Spheres](test.png)
+
+![Sphere on a plane](test2.png)
+

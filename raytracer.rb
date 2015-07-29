@@ -55,7 +55,7 @@ module ReflectiveObject
       shade = light_vector.dot(surface_normal)
       shade = 0 if shade < 0 || shadowed
       color_coeff = [scene.ambient_coeff, shade].max
-      diffuse_color = color.map {|v| v * color_coeff}
+      diffuse_color = color_at(intersection).map {|v| v * color_coeff}
       
       # Combine colors
       final_color = 
@@ -92,6 +92,10 @@ class Sphere
     @color = color
 
     self.reflectivity = reflectivity
+  end
+
+  def color_at location
+    color
   end
   
   def point_of_intersection ray
@@ -131,9 +135,47 @@ class Sphere
 
 end
 
+class Plane
+  include ReflectiveObject
+
+  attr_reader :origin, :normal, :size
+
+  def initialize origin, normal, size, reflectivity
+    @origin = origin
+    @normal = normal
+    @size = size
+
+    self.reflectivity = reflectivity
+  end
+
+  def point_of_intersection ray
+    denom = ray.direction.dot(normal)
+
+    return if denom == 0
+    
+    d = (origin - ray.from).dot(normal) / denom
+    intersection = ray.from + (d * ray.direction)
+    intersection_is_in_ray_direction = (intersection - ray.from).dot(ray.direction) > 0 
+    intersection if intersection_is_in_ray_direction && within_bounds(intersection)
+  end
+
+  def within_bounds(intersection)
+    (intersection - origin).magnitude <= size
+  end
+
+  def color_at location
+    ((location - origin).magnitude./(100).to_i).even? ? [255,255,0] : [255,255,255]
+  end
+
+  def normal_at location
+    normal
+  end
+
+end
+
 class LightSource < Sphere
 
-  def initialize origin, radius, color, reflectivity=0.5
+  def initialize origin, radius, color, reflectivity=0
     super 
   end
 
@@ -198,10 +240,10 @@ end
 camera_location = Vector[0,0,200]
 scene = Scene.new
 scene.ambient_coeff = 0.2
-scene.light_source = LightSource.new Vector[0,0,10000], 400, [255,255,255], 1.0
+scene.light_source = LightSource.new(Vector[-1000,1000,300], 400, [255,255,255], 1.0)
 scene.objects = [
-  Sphere.new(Vector[0,0,-400], 150, [0,0,255], 0.9),
-  Sphere.new(Vector[0,0,500], 200, [255,0,0], 0.9)
+  Sphere.new(Vector[0,100,-300], 200, [0,0,255], 0.9),
+  Plane.new(Vector[0,-300,0], Vector[0,1,0], 10000, 0)
 ]
 
 file_name = File.expand_path(ARGV.first || 'test.png')
