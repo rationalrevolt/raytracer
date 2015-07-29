@@ -5,7 +5,19 @@ require 'chunky_png'
 
 class Scene
 
-  attr_accessor :light_source, :objects, :ambient_coeff, :diffuse_coeff
+  attr_accessor :light_source, :objects, :ambient_coeff
+
+  def light_source_location
+    light_source.origin
+  end
+
+  def shadowed? the_object, location
+    light_direction = (light_source_location - location).normalize
+    shadow_ray = Ray.new(location, light_direction)
+    objects
+      .select {|o| o != the_object}
+      .detect {|o| o.point_of_intersection shadow_ray}
+  end
 
 end
 
@@ -20,60 +32,69 @@ class Ray
 
 end
 
-class Sphere
+module ReflectiveObject
 
-  attr_reader :origin, :radius, :color, :reflectivity
+  attr_accessor :reflectivity
+
+  def color_for ray, order, tracer, scene
+    light_source_location = scene.light_source_location
+    intersection = point_of_intersection ray
+    
+    if intersection
+      light_vector = (light_source_location - intersection).normalize
+      surface_normal = normal_at intersection
+
+      shadowed = scene.shadowed? self, intersection
+
+      # Specular reflection
+      reflected_ray_direction = bounce_direction ray.direction, surface_normal
+      reflected_ray = Ray.new(intersection, reflected_ray_direction)
+      reflected_color = order < 4 ? tracer.trace_ray(reflected_ray, order + 1, self) : nil
+      
+      # Diffuse reflection
+      shade = light_vector.dot(surface_normal)
+      shade = 0 if shade < 0 || shadowed
+      color_coeff = [scene.ambient_coeff, shade].max
+      diffuse_color = color.map {|v| v * color_coeff}
+      
+      # Combine colors
+      final_color = 
+        if reflected_color
+          diffuse_color
+            .zip(reflected_color)
+            .map {|d,r| d * (1 - reflectivity) + r * reflectivity}
+        else
+          diffuse_color
+        end
+      
+      final_color.map {|v| v.to_i}
+    end
+  end
+
+  def bounce_direction ray_direction, normal_direction
+    v = ray_direction
+    n = normal_direction
+
+    c1 = -v.dot(n)
+    (v + (2 * c1 * n)).normalize
+  end
+
+end
+
+class Sphere
+  include ReflectiveObject
+  
+  attr_reader :origin, :radius, :color
 
   def initialize origin, radius, color, reflectivity=0.5
     @origin = origin
     @radius = radius
     @color = color
-    @reflectivity = reflectivity
+
+    self.reflectivity = reflectivity
   end
-
-  def ambient_coeff scene
-    scene.ambient_coeff
-  end
-
-  def diffuse_coeff scene
-    scene.diffuse_coeff
-  end
-
-  def light_source scene
-    scene.light_source.origin
-  end
-
-  def color_for ray, tracer, scene
-    intersections = intersections_by ray
-    if intersections
-      intersection_point = intersections.first
-      surface_normal = normal_at(intersection_point)
-
-      # Specular reflection
-      reflected_ray_direction = bounce_direction ray.direction, surface_normal
-      reflected_ray = Ray.new(intersection_point, reflected_ray_direction)
-      reflected_color = tracer.trace_ray reflected_ray, self
-      
-      # Diffuse reflection
-      light_vector = (light_source(scene) - intersection_point).normalize
-      shade = light_vector.dot(surface_normal)
-      shade = 0 if shade < 0
-      color_coeff = ambient_coeff(scene) + shade * diffuse_coeff(scene)
-      diffuse_color = color.map {|v| v * color_coeff}
-      
-      # Combine colors
-      final_color = if reflected_color
-        diffuse_color.zip(reflected_color).map {|d,r| d*(1 - reflectivity) + r*reflectivity}
-      else
-        diffuse_color
-      end
-
-      final_color.map {|v| v.to_i}
-    end
-  end
-
-  # Returns intersection points as [p1, p2] where p1 is the closer intersection
-  def intersections_by ray
+  
+  def point_of_intersection ray
     p0 = ray.from
     c0 = origin
     r = radius
@@ -95,26 +116,17 @@ class Sphere
       points = [p1,p2]
       distances = points.map {|p| (p - p0).dot(d)}
 
-      result = points
+      points
         .zip(distances)
         .select {|p,dist| dist >= 0}
         .sort {|(p1,d1), (p2,d2)| d1 <=> d2}
         .map {|p,dist| p}
-
-      result unless result.empty?
+        .first
     end
   end
 
   def normal_at point_on_sphere
     (point_on_sphere - origin).normalize
-  end
-
-  def bounce_direction ray_direction, normal_direction
-    v = ray_direction
-    n = normal_direction
-
-    c1 = -v.dot(n)
-    (v + (2 * c1 * n)).normalize
   end
 
 end
@@ -125,8 +137,8 @@ class LightSource < Sphere
     super 
   end
 
-  def color_for ray, tracer, scene
-    color if intersections_by(ray)
+  def color_for ray, order, tracer, scene
+    color if point_of_intersection ray
   end
 
 end
@@ -135,23 +147,10 @@ class Tracer
 
   attr_reader :scene, :camera_location, :frame_z
 
-  def initialize
-    light_source = LightSource.new Vector[0,1000,0], 400, [255,255,255], 1.0
-    
-    scene = Scene.new
-    scene.diffuse_coeff = 0.8
-    scene.ambient_coeff = 0.2
-    scene.light_source = light_source
-    scene.objects = [
-      light_source,
-      Sphere.new(Vector[-200,0,-200], 150, [0,0,255], 0.9),
-      Sphere.new(Vector[200,0,-200], 150, [255,0,0], 0.9)
-    ]
-    
-    
+  def initialize camera_location, scene
     @scene = scene
     @frame_z = 50
-    @camera_location = Vector[0,0,200]
+    @camera_location = camera_location
   end
   
   def trace_rays frame_width, frame_height
@@ -173,8 +172,8 @@ class Tracer
     end
   end
         
-  def trace_ray ray, from=nil
-    scene.objects.map {|o| from != o && o.color_for(ray, self, scene)}.detect {|c| c}
+  def trace_ray ray, order = 0, from = nil
+    (scene.objects + [scene.light_source]).map {|o| from != o && o.color_for(ray, order, self, scene)}.detect {|c| c}
   end
 
   def generate save_path
@@ -196,7 +195,15 @@ class Tracer
 
 end
 
+camera_location = Vector[0,0,200]
+scene = Scene.new
+scene.ambient_coeff = 0.2
+scene.light_source = LightSource.new Vector[0,0,10000], 400, [255,255,255], 1.0
+scene.objects = [
+  Sphere.new(Vector[0,0,-400], 150, [0,0,255], 0.9),
+  Sphere.new(Vector[0,0,500], 200, [255,0,0], 0.9)
+]
 
 file_name = File.expand_path(ARGV.first || 'test.png')
 
-Tracer.new.generate file_name
+Tracer.new(camera_location, scene).generate file_name
